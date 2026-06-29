@@ -66,4 +66,4 @@ A secure password management application built with Java, featuring encryption, 
 - [ ] Search & filter functionality
 
 ## Author
-ay-shifa
+Shifa Fatima
