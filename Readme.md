@@ -84,14 +84,16 @@ mvn exec:java -Dexec.mainClass="com.securevault.MainApp"
 ## User Interface
 
 ### 1. Master Password Login Screen
-![Master Password Login](https://raw.githubusercontent.com/ay-shifa/2025-CYS-133/main/screenshots/1_login_screen.png)
+![Master Password Login](<img width="896" height="628" alt="Screenshot 2026-06-29 202748" src="https://github.com/user-attachments/assets/d9fcdde3-2dfd-4190-bd48-3b0fdea20aa7" />
+)
 
 The initial login screen where users enter their master password to unlock the vault. This implements secure password verification using SHA-256 hashing.
 
 ---
 
 ### 2. Main Dashboard - Credential Management
-![Main Dashboard](https://raw.githubusercontent.com/ay-shifa/2025-CYS-133/main/screenshots/2_main_dashboard.png)
+![Main Dashboard](<img width="1342" height="1083" alt="Screenshot 2026-06-29 202833" src="https://github.com/user-attachments/assets/34073bd3-e77d-4aa9-bf1b-d315eca66bf0" />
+)
 
 The central hub featuring:
 - **Add New Credential** form for storing website/app credentials
@@ -105,14 +107,16 @@ The central hub featuring:
 ---
 
 ### 3. Credential Verification Dialog
-![Credential Verification](https://raw.githubusercontent.com/ay-shifa/2025-CYS-133/main/screenshots/3_verification_dialog.png)
+![Credential Verification](<img width="1344" height="1088" alt="Screenshot 2026-06-29 202945" src="https://github.com/user-attachments/assets/5a83ec48-7cfd-4300-879f-306255632405" />
+)
 
 A security layer that requires password verification before editing stored credentials, ensuring unauthorized access is prevented even if the vault is unlocked.
 
 ---
 
 ### 4. View Encrypted Passwords
-![Encrypted Password Display](https://raw.githubusercontent.com/ay-shifa/2025-CYS-133/main/screenshots/4_encrypted_display.png)
+![Encrypted Password Display](<img width="1351" height="1100" alt="Screenshot 2026-06-29 203109" src="https://github.com/user-attachments/assets/40549f1a-ffe0-44d4-8829-0d167c2a93c2" />
+)
 
 The encrypted password viewer showing:
 - **Credential List** (google.com, github, youtube12, hackerRank, instagram, tiktok)
@@ -214,7 +218,7 @@ The encrypted password viewer showing:
 
 ## License
 
-This project is part of the CYS-133 course at [Your Institution].
+This project is part of the Cyber SEcurity course at UET.
 
 ---
 
@@ -234,8 +238,5 @@ For issues, feature requests, or contributions, please open an issue on the GitH
 
 ## Disclaimer
 
-This is an educational project. For production use, additional security measures and professional security audits are recommended.<img width="1344" height="1088" alt="Screenshot 2026-06-29 202945" src="https://github.com/user-attachments/assets/5af736d9-deb1-4baf-b511-3ef417ec159b" />
-<img width="1342" height="1083" alt="Screenshot 2026-06-29 202833" src="https://github.com/user-attachments/assets/3c8e7ee9-38f9-4a4b-b22c-ad3e2c768369" />
-<img width="896" height="628" alt="Screenshot 2026-06-29 202748" src="https://github.com/user-attachments/assets/3977e68f-0008-40d1-ab42-a742afaa1f19" />
-<img width="1351" height="1100" alt="Screenshot 2026-06-29 203109" src="https://github.com/user-attachments/assets/c89b0a09-0a54-4646-82b8-628025ff6372" />
+This is an educational project. For production use, additional security measures and professional security audits are recommended.
 
