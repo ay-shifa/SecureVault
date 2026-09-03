@@ -1,0 +1,24 @@
+{
+  "name": "secure-vault-web",
+  "version": "2.0.0",
+  "description": "SecureVault — Professional Zero-Knowledge Web Password Manager",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "password-manager",
+    "security",
+    "zero-knowledge",
+    "aes-256",
+    "pbkdf2",
+    "sqlite"
+  ],
+  "author": "SecureVault",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "mongodb": "^7.6.0"
+  }
+}

@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SecureVault — Zero-Knowledge Password Manager</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220%22%20width=%2232%22%20height=%2232%22><text y=%2226%22 font-size=%2226%22>🔒</text></svg>">
+</head>
+<body>
+  <div id="app">
+    <!-- ======================================================
+         1. AUTH VIEW (Setup or Unlock)
+         ====================================================== -->
+    <div id="authView" class="auth-container">
+      
+      <!-- SETUP SCREEN (First-time user) -->
+      <div id="setupCard" class="auth-card" style="display: none;">
+        <div class="auth-header">
+          <div class="logo-icon">🔒</div>
+          <h1>Create Your Master Password</h1>
+          <p>This password derives your 256-bit encryption key. It is never stored or sent anywhere in plaintext.</p>
+        </div>
+
+        <form id="setupForm">
+          <div class="form-group">
+            <label class="form-label" for="setupPassword">Master Password (min 8 characters)</label>
+            <div class="input-wrapper">
+              <input type="password" id="setupPassword" class="input-field" placeholder="Create strong master password" required autofocus />
+              <button type="button" class="input-toggle-btn" onclick="togglePasswordVisibility('setupPassword', this)" title="Show/Hide">👁️</button>
+            </div>
+            <div class="strength-meter">
+              <div class="strength-bar-track">
+                <div id="setupStrengthBar" class="strength-bar-fill"></div>
+              </div>
+              <div class="strength-text">
+                <span>Strength: <strong id="setupStrengthLabel">—</strong></span>
+                <span id="setupCharCount">0 chars</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="setupConfirmPassword">Confirm Master Password</label>
+            <div class="input-wrapper">
+              <input type="password" id="setupConfirmPassword" class="input-field" placeholder="Re-enter master password" required />
+              <button type="button" class="input-toggle-btn" onclick="togglePasswordVisibility('setupConfirmPassword', this)" title="Show/Hide">👁️</button>
+            </div>
+          </div>
+
+          <div id="setupStatus" class="form-group" style="display: none;"></div>
+
+          <button type="submit" id="setupSubmitBtn" class="btn btn-primary btn-block">
+            Set Master Password & Initialize Vault
+          </button>
+        </form>
+      </div>
+
+      <!-- UNLOCK SCREEN (Returning user) -->
+      <div id="unlockCard" class="auth-card" style="display: none;">
+        <div class="auth-header">
+          <div class="logo-icon">🔒</div>
+          <h1>Unlock Secure Vault</h1>
+          <p>Enter your Master Password to decrypt your credentials</p>
+        </div>
+
+        <form id="unlockForm">
+          <div class="form-group">
+            <label class="form-label" for="unlockPassword">Master Password</label>
+            <div class="input-wrapper">
+              <input type="password" id="unlockPassword" class="input-field" placeholder="Enter your master password" required autofocus />
+              <button type="button" class="input-toggle-btn" onclick="togglePasswordVisibility('unlockPassword', this)" title="Show/Hide">👁️</button>
+            </div>
+          </div>
+
+          <div id="unlockStatus" class="form-group" style="display: none;"></div>
+
+          <button type="submit" id="unlockSubmitBtn" class="btn btn-primary btn-block">
+            Unlock Vault
+          </button>
+        </form>
+      </div>
+
+    </div>
+
+    <!-- ======================================================
+         2. DASHBOARD VIEW (Unlocked)
+         ====================================================== -->
+    <div id="dashboardView" style="display: none; width: 100%; display: flex;">
+      
+      <!-- SIDEBAR -->
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-brand">
+          <span class="brand-icon">🔒</span>
+          <span class="brand-title">Secure Vault</span>
+        </div>
+
+        <nav class="sidebar-nav">
+          <button class="nav-item active" onclick="switchNav('vault')">
+            <span class="nav-icon">🗄️</span> Vault
+          </button>
+          <button class="nav-item" onclick="openGeneratorModal()">
+            <span class="nav-icon">🎲</span> Password Generator
+          </button>
+          <button class="nav-item" onclick="openExportModal()">
+            <span class="nav-icon">📤</span> Export Backup
+          </button>
+          <button class="nav-item" onclick="openImportModal()">
+            <span class="nav-icon">📥</span> Import Backup
+          </button>
+          <button class="nav-item" onclick="openEncryptedViewerModal()">
+            <span class="nav-icon">🔬</span> View Encrypted
+          </button>
+          <button class="nav-item" onclick="openChangePasswordModal()">
+            <span class="nav-icon">⚙️</span> Change Password
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <button class="nav-item lock-btn" onclick="lockVault()">
+            <span class="nav-icon">🔒</span> Lock Vault
+          </button>
+        </div>
+      </aside>
+
+      <!-- MAIN CONTENT -->
+      <main class="main-content">
+        <!-- TOP HEADER -->
+        <header class="top-bar">
+          <div class="top-bar-left">
+            <button class="mobile-menu-btn" onclick="toggleMobileMenu()">☰</button>
+            <span class="security-badge">
+              <span class="dot"></span>
+              AES-256 / PBKDF2 (Zero-Knowledge)
+            </span>
+            <span id="backendBadge" class="security-badge" style="background-color: rgba(52, 152, 219, 0.15); color: var(--secondary); border-color: rgba(52, 152, 219, 0.3);">
+              SQLite Database Connected
+            </span>
+          </div>
+
+          <div class="top-bar-right">
+            <button class="btn btn-outline btn-sm" onclick="toggleTheme()" title="Toggle Theme">
+              🌓 Theme
+            </button>
+            <button class="btn btn-outline btn-sm" onclick="lockVault()" title="Lock Vault">
+              🔒 Lock
+            </button>
+          </div>
+        </header>
+
+        <!-- PAGE BODY -->
+        <div class="page-body">
+          
+          <!-- Clipboard Auto-clear countdown banner -->
+          <div id="clipboardBanner" class="clipboard-timer-banner" style="display: none;">
+            <span>📋 Password copied to clipboard — auto-clearing for security in:</span>
+            <span id="clipboardTimer" class="countdown">10s</span>
+          </div>
+
+          <!-- Stats Overview -->
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-icon blue">🗂️</div>
+              <div>
+                <div class="stat-value" id="statTotal">0</div>
+                <div class="stat-label">Stored Credentials</div>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon green">🛡️</div>
+              <div>
+                <div class="stat-value" id="statStrong">0</div>
+                <div class="stat-label">Strong Passwords</div>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon orange">⚠️</div>
+              <div>
+                <div class="stat-value" id="statMedium">0</div>
+                <div class="stat-label">Medium Passwords</div>
+              </div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-icon red">🚨</div>
+              <div>
+                <div class="stat-value" id="statWeak">0</div>
+                <div class="stat-label">Weak Passwords</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Add / Edit Credential Form -->
+          <div class="card" id="credentialFormCard">
+            <div class="card-header">
+              <span class="card-title">
+                <span id="formCardIcon">➕</span>
+                <span id="formCardTitle">Add New Credential</span>
+              </span>
+              <button type="button" id="cancelEditBtn" class="btn btn-outline btn-sm" style="display: none;" onclick="cancelEdit()">
+                Cancel Edit
+              </button>
+            </div>
+            <div class="card-body">
+              <form id="credentialForm">
+                <input type="hidden" id="editingId" value="" />
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px;">
+                  
+                  <div class="form-group">
+                    <label class="form-label" for="credWebsite">Website / Service</label>
+                    <input type="text" id="credWebsite" class="input-field" placeholder="e.g. github.com, google.com" required />
+                  </div>
+
+                  <div class="form-group">
+                    <label class="form-label" for="credUsername">Username / Email</label>
+                    <input type="text" id="credUsername" class="input-field" placeholder="e.g. user@example.com" required />
+                  </div>
+
+                  <div class="form-group">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                      <label class="form-label" for="credPassword" style="margin-bottom: 0;">Password</label>
+                      <button type="button" class="btn btn-outline btn-sm" style="padding: 2px 8px; font-size: 11px;" onclick="openGeneratorModal()">
+                        🎲 Generate
+                      </button>
+                    </div>
+                    <div class="input-wrapper">
+                      <input type="password" id="credPassword" class="input-field" placeholder="Enter password" required />
+                      <button type="button" class="input-toggle-btn" onclick="togglePasswordVisibility('credPassword', this)" title="Show/Hide">👁️</button>
+                    </div>
+                    
+                    <div class="strength-meter">
+                      <div class="strength-bar-track">
+                        <div id="credStrengthBar" class="strength-bar-fill"></div>
+                      </div>
+                      <div class="strength-text">
+                        <span>Strength: <strong id="credStrengthLabel">—</strong></span>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+
+                <div style="display: flex; justify-content: flex-end; gap: 12px; margin-top: 16px;">
+                  <button type="submit" id="saveCredBtn" class="btn btn-primary">
+                    💾 Save Credential
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- Credentials Table / Cards -->
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">🗄️ Your Saved Credentials</span>
+              <button class="btn btn-outline btn-sm" onclick="exportBackupText()">
+                📥 Download Backup.txt
+              </button>
+            </div>
+            <div class="card-body">
+              
+              <!-- Search & Filter Toolbar -->
+              <div class="table-toolbar">
+                <div class="search-box">
+                  <span class="search-icon">🔍</span>
+                  <input type="text" id="searchInput" class="input-field" placeholder="Search by website or username..." oninput="handleSearch()" />
+                </div>
+                <div style="display: flex; gap: 10px;">
+                  <select id="sortSelect" class="input-field" style="width: auto; padding: 10px 14px;" onchange="handleSort()">
+                    <option value="dateDesc">Newest First</option>
+                    <option value="dateAsc">Oldest First</option>
+                    <option value="alphaAsc">Website (A-Z)</option>
+                    <option value="alphaDesc">Website (Z-A)</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Table Container -->
+              <div class="table-container">
+                <table class="vault-table" id="credentialsTable">
+                  <thead>
+                    <tr>
+                      <th>Website</th>
+                      <th>Username</th>
+                      <th>Password</th>
+                      <th>Strength</th>
+                      <th>Created</th>
+                      <th style="text-align: right;">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="credentialsListBody">
+                    <!-- Populated dynamically by app.js -->
+                  </tbody>
+                </table>
+
+                <div id="emptyState" class="empty-state" style="display: none;">
+                  <div class="empty-icon">📂</div>
+                  <h3>No Credentials Found</h3>
+                  <p>Add your first credential using the form above.</p>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
+      </main>
+
+    </div>
+
+    <!-- ======================================================
+         MODALS
+         ====================================================== -->
+
+    <!-- 1. PASSWORD GENERATOR MODAL -->
+    <div id="generatorModal" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3 class="modal-title">🎲 Password Generator</h3>
+          <button class="modal-close" onclick="closeModal('generatorModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label class="form-label">Generated Password</label>
+            <div class="input-wrapper">
+              <input type="text" id="genResult" class="input-field" readonly style="font-family: var(--font-mono); font-size: 16px; font-weight: 700; color: #79c0ff;" />
+              <button type="button" class="input-toggle-btn" onclick="copyGeneratedPassword()" title="Copy">📋</button>
+            </div>
+            <div class="strength-meter">
+              <div class="strength-bar-track">
+                <div id="genStrengthBar" class="strength-bar-fill"></div>
+              </div>
+              <div class="strength-text">
+                <span>Strength: <strong id="genStrengthLabel">Strong</strong></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <div class="slider-container">
+              <label class="form-label" style="margin-bottom: 0;">Length:</label>
+              <input type="range" id="genLength" min="8" max="64" value="18" oninput="updateGenLength(this.value)" />
+              <span id="genLengthVal" class="slider-val">18</span>
+            </div>
+          </div>
+
+          <div class="checkbox-grid">
+            <label class="checkbox-label">
+              <input type="checkbox" id="genUpper" checked onchange="regeneratePassword()" />
+              Uppercase (A-Z)
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="genLower" checked onchange="regeneratePassword()" />
+              Lowercase (a-z)
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="genDigits" checked onchange="regeneratePassword()" />
+              Numbers (0-9)
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="genSymbols" checked onchange="regeneratePassword()" />
+              Symbols (!@#$%)
+            </label>
+            <label class="checkbox-label" style="grid-column: span 2;">
+              <input type="checkbox" id="genAmbiguous" onchange="regeneratePassword()" />
+              Avoid ambiguous chars (l, 1, I, O, 0)
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="regeneratePassword()">🔄 Regenerate</button>
+          <button type="button" class="btn btn-primary" onclick="applyGeneratedPassword()">Use This Password</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2. VIEW ENCRYPTED MODAL (Educational Feature) -->
+    <div id="encryptedModal" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog" style="max-width: 600px;">
+        <div class="modal-header">
+          <h3 class="modal-title">🔬 Raw Encrypted Data Viewer</h3>
+          <button class="modal-close" onclick="closeModal('encryptedModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+            This educational feature shows the actual ciphertext stored in the SQLite database.
+            Notice how every record uses a distinct 16-byte random IV, so identical passwords produce completely different ciphertexts.
+          </p>
+
+          <div class="form-group">
+            <label class="form-label">Select Credential:</label>
+            <select id="encryptedSelect" class="input-field" onchange="displayEncryptedDetails()">
+              <!-- Options populated dynamically -->
+            </select>
+          </div>
+
+          <div id="encryptedDetailArea">
+            <div class="form-group">
+              <label class="form-label">Initialization Vector (IV) — 16 bytes Base64:</label>
+              <div id="encryptedIV" class="code-block">—</div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Ciphertext (AES-256-CBC) — Base64:</label>
+              <div id="encryptedCipher" class="code-block">—</div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Raw Database Record (IV:Ciphertext):</label>
+              <div id="encryptedCombined" class="code-block" style="color: #56d364;">—</div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="closeModal('encryptedModal')">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. CHANGE MASTER PASSWORD MODAL -->
+    <div id="changePasswordModal" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3 class="modal-title">⚙️ Change Master Password</h3>
+          <button class="modal-close" onclick="closeModal('changePasswordModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+            Changing your Master Password will re-encrypt all stored credentials with your new key so your vault remains fully accessible.
+          </p>
+
+          <form id="changePasswordForm">
+            <div class="form-group">
+              <label class="form-label" for="currentMasterPass">Current Master Password</label>
+              <input type="password" id="currentMasterPass" class="input-field" required />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="newMasterPass">New Master Password (min 8 characters)</label>
+              <input type="password" id="newMasterPass" class="input-field" required />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="confirmNewMasterPass">Confirm New Master Password</label>
+              <input type="password" id="confirmNewMasterPass" class="input-field" required />
+            </div>
+
+            <div id="changePassStatus" class="form-group" style="display: none;"></div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="closeModal('changePasswordModal')">Cancel</button>
+          <button type="button" class="btn btn-primary" onclick="submitChangePassword()">Change Password</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. IMPORT BACKUP MODAL -->
+    <div id="importModal" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h3 class="modal-title">📥 Import Backup</h3>
+          <button class="modal-close" onclick="closeModal('importModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+            Upload your <code>Backup.txt</code> file or paste its content. Each credential will be securely encrypted with your active session key.
+          </p>
+
+          <div class="form-group">
+            <label class="form-label">Select Backup File:</label>
+            <input type="file" id="importFileInput" accept=".txt,.json" class="input-field" onchange="handleFileSelect(event)" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Or Paste Backup Content:</label>
+            <textarea id="importText" class="input-field" rows="6" placeholder="Website: example.com&#10;Username: user&#10;Password: pass&#10;-------------------------------" style="font-family: var(--font-mono);"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="closeModal('importModal')">Cancel</button>
+          <button type="button" class="btn btn-primary" onclick="submitImport()">Import Credentials</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5. DELETE CONFIRMATION MODAL -->
+    <div id="deleteModal" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog" style="max-width: 400px;">
+        <div class="modal-header">
+          <h3 class="modal-title">⚠️ Delete Credential</h3>
+          <button class="modal-close" onclick="closeModal('deleteModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <p>Are you sure you want to delete credentials for <strong id="deleteTargetWebsite">—</strong>?</p>
+          <p style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">This action cannot be undone.</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="closeModal('deleteModal')">Cancel</button>
+          <button type="button" id="confirmDeleteBtn" class="btn btn-danger">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TOAST CONTAINER -->
+    <div id="toastContainer" class="toast-container"></div>
+
+  </div>
+
+  <!-- Scripts -->
+  <script src="crypto.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
