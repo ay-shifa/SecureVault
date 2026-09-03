@@ -14,71 +14,94 @@
          ====================================================== -->
     <div id="authView" class="auth-container">
       
-      <!-- SETUP SCREEN (First-time user) -->
-      <div id="setupCard" class="auth-card" style="display: none;">
+      <!-- MULTI-ACCOUNT AUTH CARD -->
+      <div id="authCard" class="auth-card">
         <div class="auth-header">
           <div class="logo-icon">🔒</div>
-          <h1>Create Your Master Password</h1>
-          <p>This password derives your 256-bit encryption key. It is never stored or sent anywhere in plaintext.</p>
+          <h1 id="authTitle">Secure Vault</h1>
+          <p id="authSubtitle">Zero-Knowledge Cloud-Synchronized Password Manager</p>
         </div>
 
-        <form id="setupForm">
+        <!-- AUTH TABS -->
+        <div class="auth-tabs">
+          <button type="button" id="tabLoginBtn" class="auth-tab-btn active" onclick="switchAuthTab('login')">
+            🔑 Log In
+          </button>
+          <button type="button" id="tabRegisterBtn" class="auth-tab-btn" onclick="switchAuthTab('register')">
+            ➕ New Account
+          </button>
+        </div>
+
+        <!-- 1. LOGIN FORM -->
+        <form id="loginForm">
           <div class="form-group">
-            <label class="form-label" for="setupPassword">Master Password (min 8 characters)</label>
+            <label class="form-label" for="loginEmail">Account / Username</label>
+            <input type="text" id="loginEmail" class="input-field" placeholder="e.g. personal, work, name@email.com" list="recentAccountsList" required autofocus />
+            <datalist id="recentAccountsList"></datalist>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="loginPassword">Master Password</label>
             <div class="input-wrapper">
-              <input type="password" id="setupPassword" class="input-field" placeholder="Create strong master password" required autofocus />
-              <button type="button" class="input-toggle-btn" onclick="togglePasswordVisibility('setupPassword', this)" title="Show/Hide">👁️</button>
+              <input type="password" id="loginPassword" class="input-field" placeholder="Enter your master password" required />
+              <button type="button" class="input-toggle-btn" onclick="togglePasswordVisibility('loginPassword', this)" title="Show/Hide">👁️</button>
+            </div>
+          </div>
+
+          <div id="loginStatus" class="form-group" style="display: none;"></div>
+
+          <button type="submit" id="loginSubmitBtn" class="btn btn-primary btn-block">
+            Unlock Vault
+          </button>
+
+          <div class="auth-switch-link">
+            Need a new account? <a onclick="switchAuthTab('register')">Create a new account & master password</a>
+          </div>
+        </form>
+
+        <!-- 2. REGISTER NEW ACCOUNT FORM -->
+        <form id="registerForm" style="display: none;">
+          <div class="form-group">
+            <label class="form-label" for="registerEmail">New Account / Username</label>
+            <input type="text" id="registerEmail" class="input-field" placeholder="e.g. personal, work, name@email.com" required />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="registerPassword">Master Password (min 8 characters)</label>
+            <div class="input-wrapper">
+              <input type="password" id="registerPassword" class="input-field" placeholder="Create strong master password" required />
+              <button type="button" class="input-toggle-btn" onclick="togglePasswordVisibility('registerPassword', this)" title="Show/Hide">👁️</button>
             </div>
             <div class="strength-meter">
               <div class="strength-bar-track">
-                <div id="setupStrengthBar" class="strength-bar-fill"></div>
+                <div id="registerStrengthBar" class="strength-bar-fill"></div>
               </div>
               <div class="strength-text">
-                <span>Strength: <strong id="setupStrengthLabel">—</strong></span>
-                <span id="setupCharCount">0 chars</span>
+                <span>Strength: <strong id="registerStrengthLabel">—</strong></span>
+                <span id="registerCharCount">0 chars</span>
               </div>
             </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="setupConfirmPassword">Confirm Master Password</label>
+            <label class="form-label" for="registerConfirmPassword">Confirm Master Password</label>
             <div class="input-wrapper">
-              <input type="password" id="setupConfirmPassword" class="input-field" placeholder="Re-enter master password" required />
-              <button type="button" class="input-toggle-btn" onclick="togglePasswordVisibility('setupConfirmPassword', this)" title="Show/Hide">👁️</button>
+              <input type="password" id="registerConfirmPassword" class="input-field" placeholder="Re-enter master password" required />
+              <button type="button" class="input-toggle-btn" onclick="togglePasswordVisibility('registerConfirmPassword', this)" title="Show/Hide">👁️</button>
             </div>
           </div>
 
-          <div id="setupStatus" class="form-group" style="display: none;"></div>
+          <div id="registerStatus" class="form-group" style="display: none;"></div>
 
-          <button type="submit" id="setupSubmitBtn" class="btn btn-primary btn-block">
-            Set Master Password & Initialize Vault
+          <button type="submit" id="registerSubmitBtn" class="btn btn-primary btn-block">
+            Create Account & Initialize Vault
           </button>
-        </form>
-      </div>
 
-      <!-- UNLOCK SCREEN (Returning user) -->
-      <div id="unlockCard" class="auth-card" style="display: none;">
-        <div class="auth-header">
-          <div class="logo-icon">🔒</div>
-          <h1>Unlock Secure Vault</h1>
-          <p>Enter your Master Password to decrypt your credentials</p>
-        </div>
-
-        <form id="unlockForm">
-          <div class="form-group">
-            <label class="form-label" for="unlockPassword">Master Password</label>
-            <div class="input-wrapper">
-              <input type="password" id="unlockPassword" class="input-field" placeholder="Enter your master password" required autofocus />
-              <button type="button" class="input-toggle-btn" onclick="togglePasswordVisibility('unlockPassword', this)" title="Show/Hide">👁️</button>
-            </div>
+          <div class="auth-switch-link">
+            Already have an account? <a onclick="switchAuthTab('login')">Log into existing vault</a>
           </div>
-
-          <div id="unlockStatus" class="form-group" style="display: none;"></div>
-
-          <button type="submit" id="unlockSubmitBtn" class="btn btn-primary btn-block">
-            Unlock Vault
-          </button>
         </form>
+
       </div>
 
     </div>
@@ -93,6 +116,14 @@
         <div class="sidebar-brand">
           <span class="brand-icon">🔒</span>
           <span class="brand-title">Secure Vault</span>
+        </div>
+
+        <div class="account-card-sidebar">
+          <div class="user-info">
+            <span class="user-label">ACTIVE ACCOUNT</span>
+            <span class="user-email" id="sidebarUserEmail">account@vault</span>
+          </div>
+          <button class="action-icon-btn" onclick="promptSwitchAccount()" title="Switch or Add Account" style="width: 26px; height: 26px; font-size: 12px;">➕</button>
         </div>
 
         <nav class="sidebar-nav">
@@ -114,6 +145,9 @@
           <button class="nav-item" onclick="openChangePasswordModal()">
             <span class="nav-icon">⚙️</span> Change Password
           </button>
+          <button class="nav-item" onclick="promptSwitchAccount()">
+            <span class="nav-icon">👥</span> Switch / New Account
+          </button>
         </nav>
 
         <div class="sidebar-footer">
@@ -131,7 +165,7 @@
             <button class="mobile-menu-btn" onclick="toggleMobileMenu()">☰</button>
             <span class="security-badge">
               <span class="dot"></span>
-              AES-256 / PBKDF2 (Zero-Knowledge)
+              AES-256 (Zero-Knowledge)
             </span>
             <span id="backendBadge" class="security-badge" style="background-color: rgba(52, 152, 219, 0.15); color: var(--secondary); border-color: rgba(52, 152, 219, 0.3);">
               SQLite Database Connected
@@ -139,6 +173,13 @@
           </div>
 
           <div class="top-bar-right">
+            <span class="user-account-chip" id="currentUserChip">
+              <span class="avatar" id="userAvatarLetter">U</span>
+              <span id="currentUserEmail">Account</span>
+            </span>
+            <button class="btn btn-outline btn-sm" onclick="promptSwitchAccount()" title="Switch Account or Add New">
+              🔄 Switch
+            </button>
             <button class="btn btn-outline btn-sm" onclick="toggleTheme()" title="Toggle Theme">
               🌓 Theme
             </button>
@@ -497,6 +538,37 @@
         <div class="modal-footer">
           <button type="button" class="btn btn-outline" onclick="closeModal('deleteModal')">Cancel</button>
           <button type="button" id="confirmDeleteBtn" class="btn btn-danger">Delete</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. SWITCH ACCOUNT MODAL -->
+    <div id="switchAccountModal" class="modal-overlay" style="display: none;">
+      <div class="modal-dialog" style="max-width: 460px;">
+        <div class="modal-header">
+          <h3 class="modal-title">👥 Switch or Add Account</h3>
+          <button class="modal-close" onclick="closeModal('switchAccountModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+            Choose an account to unlock, or add a brand new account with its own independent master password and private encrypted vault.
+          </p>
+
+          <div id="modalAccountsList" style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px;">
+            <!-- Rendered by JS -->
+          </div>
+
+          <div style="border-top: 1px solid var(--border-color); padding-top: 16px; display: flex; flex-direction: column; gap: 10px;">
+            <button type="button" class="btn btn-primary btn-block" onclick="prepareSwitchToAccount('new')">
+              ➕ Create New Account (New Master Password)
+            </button>
+            <button type="button" class="btn btn-outline btn-block" onclick="prepareSwitchToAccount('other')">
+              🔑 Log In with Another Account
+            </button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline" onclick="closeModal('switchAccountModal')">Cancel</button>
         </div>
       </div>
     </div>

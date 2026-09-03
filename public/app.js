@@ -1,23 +1,23 @@
 /**
- * SecureVault Web Application
- * Client-side Controller & State Management
+ * SecureVault Web Application (Multi-Account Edition)
+ * Client-side Controller & Zero-Knowledge State Management
  */
 
 // Application State
 let appState = {
-  initialized: false,
+  currentUser: null,       // { id, email, salt }
   isUnlocked: false,
-  sessionKey: null,
-  salt: null,
-  masterPasswordHash: null,
-  credentials: [],        // { id, website, username, password, encryptedPassword, createdAt, strength }
+  sessionKey: null,        // 256-bit AES key in tab memory only
+  masterPasswordHash: null,// SHA-256 hash in tab memory only
+  credentials: [],         // Decrypted credentials for current user
   filteredCredentials: [],
-  revealedSet: new Set(), // Set of credential IDs with visible passwords
+  revealedSet: new Set(),  // Set of credential IDs with visible passwords
   editingId: null,
   deleteTargetId: null,
   clipboardCountdown: null,
   inactivityTimer: null,
-  isOfflineMode: false
+  isOfflineMode: false,
+  knownAccounts: []        // Cached list of known accounts [{ id, email }]
 };
 
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes auto-lock
@@ -27,12 +27,12 @@ const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes auto-lock
 // ----------------------------------------------------------
 document.addEventListener('DOMContentLoaded', async () => {
   initTheme();
+  loadKnownAccounts();
   setupEventListeners();
   await checkServerStatus();
   resetInactivityTimer();
 });
 
-// Detect dark/light theme preference
 function initTheme() {
   const savedTheme = localStorage.getItem('securevault_theme') || 'dark';
   document.documentElement.setAttribute('data-theme', savedTheme);
@@ -43,6 +43,42 @@ function toggleTheme() {
   const newTheme = current === 'dark' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', newTheme);
   localStorage.setItem('securevault_theme', newTheme);
+}
+
+// ----------------------------------------------------------
+// Known Accounts Management (Local Cache & Autocomplete)
+// ----------------------------------------------------------
+function loadKnownAccounts() {
+  try {
+    const raw = localStorage.getItem('securevault_known_accounts');
+    appState.knownAccounts = raw ? JSON.parse(raw) : [];
+  } catch (_) {
+    appState.knownAccounts = [];
+  }
+  refreshAccountsDatalist();
+}
+
+function saveKnownAccount(id, email) {
+  const normalized = email.trim().toLowerCase();
+  const existingIndex = appState.knownAccounts.findIndex(a => a.email === normalized);
+  if (existingIndex !== -1) {
+    appState.knownAccounts[existingIndex].id = id;
+  } else {
+    appState.knownAccounts.unshift({ id, email: normalized });
+  }
+  localStorage.setItem('securevault_known_accounts', JSON.stringify(appState.knownAccounts));
+  refreshAccountsDatalist();
+}
+
+function refreshAccountsDatalist() {
+  const datalist = document.getElementById('recentAccountsList');
+  if (!datalist) return;
+  datalist.innerHTML = '';
+  appState.knownAccounts.forEach(acc => {
+    const opt = document.createElement('option');
+    opt.value = acc.email;
+    datalist.appendChild(opt);
+  });
 }
 
 // ----------------------------------------------------------
@@ -68,55 +104,92 @@ async function checkServerStatus() {
       badge.style.borderColor = 'rgba(52, 152, 219, 0.3)';
     }
 
-    if (data.initialized) {
-      appState.initialized = true;
-      appState.salt = data.salt;
-      showUnlockScreen();
+    if (Array.isArray(data.recentAccounts)) {
+      data.recentAccounts.forEach(acc => saveKnownAccount(acc.id, acc.email));
+    }
+
+    // If accounts exist, default to Login tab. If none exist, default to Register tab.
+    if (data.hasUsers || appState.knownAccounts.length > 0) {
+      switchAuthTab('login');
+      if (appState.knownAccounts.length > 0) {
+        const loginEmailInput = document.getElementById('loginEmail');
+        if (loginEmailInput && !loginEmailInput.value) {
+          loginEmailInput.value = appState.knownAccounts[0].email;
+        }
+      }
     } else {
-      appState.initialized = false;
-      showSetupScreen();
+      switchAuthTab('register');
     }
   } catch (err) {
     console.warn('Backend server not reachable, switching to Local Browser Storage mode:', err);
     appState.isOfflineMode = true;
-    document.getElementById('backendBadge').textContent = 'Offline Browser Mode';
-    document.getElementById('backendBadge').style.color = 'var(--warning)';
+    const badge = document.getElementById('backendBadge');
+    badge.textContent = 'Offline Browser Mode';
+    badge.style.backgroundColor = 'rgba(243, 156, 18, 0.15)';
+    badge.style.color = 'var(--warning)';
 
-    // Check localStorage
-    const localVault = localStorage.getItem('securevault_offline_vault');
-    if (localVault) {
-      const parsed = JSON.parse(localVault);
-      appState.initialized = true;
-      appState.salt = parsed.salt;
-      showUnlockScreen();
+    const offlineVaults = getOfflineVaults();
+    if (Object.keys(offlineVaults).length > 0) {
+      switchAuthTab('login');
     } else {
-      appState.initialized = false;
-      showSetupScreen();
+      switchAuthTab('register');
     }
   }
 }
 
 // ----------------------------------------------------------
-// Screen Navigation
+// Auth Tab Switching
 // ----------------------------------------------------------
-function showSetupScreen() {
-  document.getElementById('authView').style.display = 'flex';
-  document.getElementById('setupCard').style.display = 'block';
-  document.getElementById('unlockCard').style.display = 'none';
-  document.getElementById('dashboardView').style.display = 'none';
+function switchAuthTab(tab) {
+  const tabLoginBtn = document.getElementById('tabLoginBtn');
+  const tabRegisterBtn = document.getElementById('tabRegisterBtn');
+  const loginForm = document.getElementById('loginForm');
+  const registerForm = document.getElementById('registerForm');
+  const authTitle = document.getElementById('authTitle');
+  const authSubtitle = document.getElementById('authSubtitle');
+
+  document.getElementById('loginStatus').style.display = 'none';
+  document.getElementById('registerStatus').style.display = 'none';
+
+  if (tab === 'login') {
+    tabLoginBtn.classList.add('active');
+    tabRegisterBtn.classList.remove('active');
+    loginForm.style.display = 'block';
+    registerForm.style.display = 'none';
+    authTitle.textContent = 'Unlock Secure Vault';
+    authSubtitle.textContent = 'Select your account and enter your Master Password';
+    setTimeout(() => {
+      const emailInput = document.getElementById('loginEmail');
+      const pwInput = document.getElementById('loginPassword');
+      if (emailInput.value) pwInput.focus();
+      else emailInput.focus();
+    }, 50);
+  } else {
+    tabRegisterBtn.classList.add('active');
+    tabLoginBtn.classList.remove('active');
+    loginForm.style.display = 'none';
+    registerForm.style.display = 'block';
+    authTitle.textContent = 'Create New Account';
+    authSubtitle.textContent = 'Set a unique account name and your own independent Master Password';
+    setTimeout(() => document.getElementById('registerEmail').focus(), 50);
+  }
 }
 
-function showUnlockScreen() {
+function showAuthScreen() {
   document.getElementById('authView').style.display = 'flex';
-  document.getElementById('setupCard').style.display = 'none';
-  document.getElementById('unlockCard').style.display = 'block';
   document.getElementById('dashboardView').style.display = 'none';
-  document.getElementById('unlockPassword').focus();
 }
 
 function showDashboardScreen() {
   document.getElementById('authView').style.display = 'none';
   document.getElementById('dashboardView').style.display = 'flex';
+
+  // Update User Chip & Sidebar profile
+  const email = appState.currentUser.email || 'User';
+  document.getElementById('currentUserEmail').textContent = email;
+  document.getElementById('sidebarUserEmail').textContent = email;
+  document.getElementById('userAvatarLetter').textContent = email.charAt(0).toUpperCase();
+
   renderCredentials();
   updateStats();
   document.getElementById('searchInput').value = '';
@@ -126,29 +199,25 @@ function showDashboardScreen() {
 // Event Listeners Setup
 // ----------------------------------------------------------
 function setupEventListeners() {
-  // Setup Form
-  const setupForm = document.getElementById('setupForm');
-  const setupPw = document.getElementById('setupPassword');
-  setupPw.addEventListener('input', () => {
-    const val = setupPw.value;
-    document.getElementById('setupCharCount').textContent = `${val.length} chars`;
+  // Register Form Strength Meter
+  const regPw = document.getElementById('registerPassword');
+  regPw.addEventListener('input', () => {
+    const val = regPw.value;
+    document.getElementById('registerCharCount').textContent = `${val.length} chars`;
     const check = VaultCrypto.checkPasswordStrength(val);
-    const bar = document.getElementById('setupStrengthBar');
-    const label = document.getElementById('setupStrengthLabel');
+    const bar = document.getElementById('registerStrengthBar');
+    const label = document.getElementById('registerStrengthLabel');
 
     bar.className = 'strength-bar-fill ' + (check.strength ? check.strength.toLowerCase() : '');
     label.textContent = check.strength || '—';
     label.className = check.strength ? check.strength.toLowerCase() : '';
   });
 
-  setupForm.addEventListener('submit', handleSetupSubmit);
+  // Forms
+  document.getElementById('registerForm').addEventListener('submit', handleRegisterSubmit);
+  document.getElementById('loginForm').addEventListener('submit', handleLoginSubmit);
 
-  // Unlock Form
-  const unlockForm = document.getElementById('unlockForm');
-  unlockForm.addEventListener('submit', handleUnlockSubmit);
-
-  // Credential Form
-  const credForm = document.getElementById('credentialForm');
+  // Credential Form Strength Meter
   const credPw = document.getElementById('credPassword');
   credPw.addEventListener('input', () => {
     const val = credPw.value;
@@ -161,18 +230,15 @@ function setupEventListeners() {
     label.className = check.strength ? check.strength.toLowerCase() : '';
   });
 
-  credForm.addEventListener('submit', handleSaveCredential);
-
-  // Delete modal confirm button
+  document.getElementById('credentialForm').addEventListener('submit', handleSaveCredential);
   document.getElementById('confirmDeleteBtn').addEventListener('click', executeDeleteCredential);
 
-  // Reset inactivity timer on user actions
+  // Inactivity tracking
   ['mousemove', 'keydown', 'click', 'scroll'].forEach(evt => {
     window.addEventListener(evt, resetInactivityTimer, { passive: true });
   });
 }
 
-// Inactivity Auto-lock
 function resetInactivityTimer() {
   if (!appState.isUnlocked) return;
   clearTimeout(appState.inactivityTimer);
@@ -185,15 +251,21 @@ function resetInactivityTimer() {
 }
 
 // ----------------------------------------------------------
-// Authentication Handlers
+// Authentication: Register & Login (Multi-Account)
 // ----------------------------------------------------------
 
-// 1. Setup Master Password
-async function handleSetupSubmit(e) {
+// 1. Register New Account (New Master Password)
+async function handleRegisterSubmit(e) {
   e.preventDefault();
-  const password = document.getElementById('setupPassword').value;
-  const confirmPassword = document.getElementById('setupConfirmPassword').value;
-  const statusDiv = document.getElementById('setupStatus');
+  const email = document.getElementById('registerEmail').value.trim();
+  const password = document.getElementById('registerPassword').value;
+  const confirmPassword = document.getElementById('registerConfirmPassword').value;
+  const statusDiv = document.getElementById('registerStatus');
+
+  if (!email) {
+    showStatusMessage(statusDiv, 'Please provide an account name or email', 'error');
+    return;
+  }
 
   if (password !== confirmPassword) {
     showStatusMessage(statusDiv, 'Passwords do not match', 'error');
@@ -206,119 +278,132 @@ async function handleSetupSubmit(e) {
   }
 
   try {
-    const submitBtn = document.getElementById('setupSubmitBtn');
+    const submitBtn = document.getElementById('registerSubmitBtn');
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Deriving Keys & Initializing...';
+    submitBtn.textContent = 'Deriving Keys & Creating Account...';
 
-    // 1. Compute SHA-256 hash for authentication verification
+    // 1. Derive zero-knowledge cryptographic parameters client-side
     const passwordHash = await VaultCrypto.sha256(password);
-
-    // 2. Generate random 16-byte salt
     const salt = VaultCrypto.generateSalt();
-
-    // 3. Derive 256-bit AES key (PBKDF2 65,536 iterations)
     const sessionKey = await VaultCrypto.deriveKey(password, salt);
 
+    let userId = 'user_' + Date.now();
+
     if (appState.isOfflineMode) {
-      // Save in localStorage
-      localStorage.setItem('securevault_offline_vault', JSON.stringify({
+      const vaults = getOfflineVaults();
+      const normEmail = email.toLowerCase();
+      if (vaults[normEmail]) {
+        throw new Error('An account with this email/name already exists offline');
+      }
+      vaults[normEmail] = {
+        userId,
+        email: normEmail,
         passwordHash,
         salt,
         credentials: []
-      }));
+      };
+      saveOfflineVaults(vaults);
     } else {
-      // Save on server
-      const res = await fetch('/api/setup', {
+      const res = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passwordHash, salt })
+        body: JSON.stringify({ email, passwordHash, salt })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to setup master password');
+      if (!res.ok) throw new Error(data.error || 'Failed to create account');
+      userId = data.userId;
     }
 
-    // Set state
-    appState.initialized = true;
+    // Set authenticated state
     appState.isUnlocked = true;
+    appState.currentUser = { id: userId, email: email.toLowerCase(), salt };
     appState.sessionKey = sessionKey;
-    appState.salt = salt;
     appState.masterPasswordHash = passwordHash;
     appState.credentials = [];
+    appState.filteredCredentials = [];
 
-    showToast('Vault initialized successfully!', 'success');
+    saveKnownAccount(userId, email);
+    document.getElementById('registerForm').reset();
+
+    showToast(`Account created! Welcome to your vault, ${email}`, 'success');
     showDashboardScreen();
   } catch (err) {
-    console.error('Setup error:', err);
+    console.error('Register error:', err);
     showStatusMessage(statusDiv, err.message, 'error');
   } finally {
-    const submitBtn = document.getElementById('setupSubmitBtn');
+    const submitBtn = document.getElementById('registerSubmitBtn');
     submitBtn.disabled = false;
-    submitBtn.textContent = 'Set Master Password & Initialize Vault';
+    submitBtn.textContent = 'Create Account & Initialize Vault';
   }
 }
 
-// 2. Unlock Vault
-async function handleUnlockSubmit(e) {
+// 2. Log In / Unlock Existing Account
+async function handleLoginSubmit(e) {
   e.preventDefault();
-  const password = document.getElementById('unlockPassword').value;
-  const statusDiv = document.getElementById('unlockStatus');
-  const card = document.getElementById('unlockCard');
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const statusDiv = document.getElementById('loginStatus');
+  const card = document.getElementById('authCard');
 
-  if (!password) {
-    showStatusMessage(statusDiv, 'Please enter your Master Password', 'error');
+  if (!email || !password) {
+    showStatusMessage(statusDiv, 'Please enter both your account name and Master Password', 'error');
     return;
   }
 
   try {
-    const submitBtn = document.getElementById('unlockSubmitBtn');
+    const submitBtn = document.getElementById('loginSubmitBtn');
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Decrypting Vault...';
+    submitBtn.textContent = 'Verifying & Decrypting...';
 
-    // Compute SHA-256 hash
     const passwordHash = await VaultCrypto.sha256(password);
-    let salt = appState.salt;
+    let userId = null;
+    let salt = null;
 
     if (appState.isOfflineMode) {
-      const localVault = JSON.parse(localStorage.getItem('securevault_offline_vault') || '{}');
-      if (localVault.passwordHash !== passwordHash) {
-        throw new Error('Incorrect Master Password');
-      }
-      salt = localVault.salt;
+      const vaults = getOfflineVaults();
+      const userVault = vaults[email.toLowerCase()];
+      if (!userVault) throw new Error('Account not found in offline storage');
+      if (userVault.passwordHash !== passwordHash) throw new Error('Incorrect Master Password');
+      userId = userVault.userId;
+      salt = userVault.salt;
     } else {
-      const res = await fetch('/api/verify', {
+      const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passwordHash })
+        body: JSON.stringify({ email, passwordHash })
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Incorrect Master Password');
       }
+      userId = data.userId;
       salt = data.salt;
     }
 
-    // Derive session key in browser memory
+    // Derive session key in browser memory only
     const sessionKey = await VaultCrypto.deriveKey(password, salt);
 
     appState.isUnlocked = true;
+    appState.currentUser = { id: userId, email: email.toLowerCase(), salt };
     appState.sessionKey = sessionKey;
-    appState.salt = salt;
     appState.masterPasswordHash = passwordHash;
 
-    // Load and decrypt credentials
+    saveKnownAccount(userId, email);
+
+    // Fetch and decrypt this user's vault
     await loadAndDecryptCredentials();
 
-    document.getElementById('unlockPassword').value = '';
-    showToast('Vault unlocked successfully!', 'success');
+    document.getElementById('loginPassword').value = '';
+    showToast(`Welcome back, ${email}! Vault unlocked.`, 'success');
     showDashboardScreen();
   } catch (err) {
-    console.error('Unlock error:', err);
+    console.error('Login error:', err);
     showStatusMessage(statusDiv, err.message, 'error');
     card.classList.remove('shake');
-    void card.offsetWidth; // Trigger reflow
+    void card.offsetWidth;
     card.classList.add('shake');
   } finally {
-    const submitBtn = document.getElementById('unlockSubmitBtn');
+    const submitBtn = document.getElementById('loginSubmitBtn');
     submitBtn.disabled = false;
     submitBtn.textContent = 'Unlock Vault';
   }
@@ -327,7 +412,8 @@ async function handleUnlockSubmit(e) {
 // 3. Lock Vault
 function lockVault() {
   appState.isUnlocked = false;
-  appState.sessionKey = null; // Key garbage collected, inaccessible
+  appState.sessionKey = null; // Purge session key from memory
+  appState.masterPasswordHash = null;
   appState.credentials = [];
   appState.filteredCredentials = [];
   appState.revealedSet.clear();
@@ -336,27 +422,88 @@ function lockVault() {
   clearTimeout(appState.inactivityTimer);
   clearClipboardCountdown();
 
-  // Clear form fields
   document.getElementById('credentialForm').reset();
   cancelEdit();
 
-  showToast('Vault locked. Session key purged from memory.', 'warning');
-  showUnlockScreen();
+  showToast('Vault locked securely. Session key wiped from memory.', 'warning');
+  showAuthScreen();
+  switchAuthTab('login');
 }
 
 // ----------------------------------------------------------
-// Credentials Operations
+// Multi-Account Switcher Modal
+// ----------------------------------------------------------
+function promptSwitchAccount() {
+  const container = document.getElementById('modalAccountsList');
+  container.innerHTML = '';
+
+  if (appState.knownAccounts.length === 0) {
+    container.innerHTML = '<p style="font-size: 13px; color: var(--text-dim);">No saved accounts on this device yet.</p>';
+  } else {
+    appState.knownAccounts.forEach(acc => {
+      const isCurrent = appState.currentUser && appState.currentUser.email === acc.email;
+      const row = document.createElement('div');
+      row.className = 'stat-card';
+      row.style.cursor = 'pointer';
+      row.style.padding = '12px 16px';
+      row.style.marginBottom = '6px';
+      row.style.border = isCurrent ? '1px solid var(--primary)' : '1px solid var(--border-color)';
+      row.innerHTML = `
+        <div class="user-avatar-chip" style="width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, var(--primary), var(--secondary)); display: flex; align-items: center; justify-content: center; font-weight: 700; color: #fff;">
+          ${escapeHtml(acc.email.charAt(0).toUpperCase())}
+        </div>
+        <div style="flex-grow: 1; overflow: hidden;">
+          <div style="font-weight: 600; color: var(--text-main); font-size: 13px;">${escapeHtml(acc.email)}</div>
+          <div style="font-size: 11px; color: var(--text-muted);">${isCurrent ? '● Active Session' : 'Click to switch to this account'}</div>
+        </div>
+        ${isCurrent ? '<span style="font-size: 11px; color: var(--primary); font-weight: bold;">Current</span>' : '<button class="btn btn-outline btn-sm" style="padding: 4px 10px;">Switch</button>'}
+      `;
+      row.onclick = () => {
+        if (!isCurrent) prepareSwitchToAccount('account', acc.email);
+        else closeModal('switchAccountModal');
+      };
+      container.appendChild(row);
+    });
+  }
+
+  openModal('switchAccountModal');
+}
+
+function prepareSwitchToAccount(type, email) {
+  closeModal('switchAccountModal');
+  lockVault();
+
+  if (type === 'new') {
+    switchAuthTab('register');
+  } else if (type === 'other') {
+    switchAuthTab('login');
+    document.getElementById('loginEmail').value = '';
+    document.getElementById('loginEmail').focus();
+  } else if (email) {
+    switchAuthTab('login');
+    document.getElementById('loginEmail').value = email;
+    document.getElementById('loginPassword').focus();
+  }
+}
+
+// ----------------------------------------------------------
+// Credentials Operations (Scoped by Active User)
 // ----------------------------------------------------------
 
-// Fetch and decrypt credentials
+// Fetch and decrypt credentials for active user
 async function loadAndDecryptCredentials() {
+  if (!appState.currentUser) return;
+  const userId = appState.currentUser.id;
   let rawList = [];
 
   if (appState.isOfflineMode) {
-    const localVault = JSON.parse(localStorage.getItem('securevault_offline_vault') || '{}');
-    rawList = localVault.credentials || [];
+    const vaults = getOfflineVaults();
+    const userVault = vaults[appState.currentUser.email];
+    rawList = userVault ? (userVault.credentials || []) : [];
   } else {
-    const res = await fetch('/api/credentials');
+    const res = await fetch(`/api/credentials?userId=${encodeURIComponent(userId)}`, {
+      headers: { 'X-User-Id': userId }
+    });
     if (!res.ok) throw new Error('Failed to load credentials from database');
     const data = await res.json();
     rawList = data.credentials || [];
@@ -377,7 +524,7 @@ async function loadAndDecryptCredentials() {
         strength: strengthCheck.strength
       });
     } catch (decryptErr) {
-      console.error(`Failed to decrypt credential id ${item.id}:`, decryptErr);
+      console.error(`Decryption error on credential ${item.id}:`, decryptErr);
       decryptedList.push({
         id: item.id,
         website: item.website,
@@ -397,6 +544,9 @@ async function loadAndDecryptCredentials() {
 // Save Credential (Add or Edit)
 async function handleSaveCredential(e) {
   e.preventDefault();
+  if (!appState.currentUser) return;
+
+  const userId = appState.currentUser.id;
   const website = document.getElementById('credWebsite').value.trim();
   const username = document.getElementById('credUsername').value.trim();
   const password = document.getElementById('credPassword').value;
@@ -412,35 +562,34 @@ async function handleSaveCredential(e) {
     saveBtn.disabled = true;
     saveBtn.textContent = 'Encrypting & Saving...';
 
-    // Encrypt password using AES-256-CBC with random 16-byte IV
     const encryptedPassword = await VaultCrypto.encrypt(password, appState.sessionKey);
     const strengthCheck = VaultCrypto.checkPasswordStrength(password);
 
     if (editingId) {
       // Update existing
       if (appState.isOfflineMode) {
-        const localVault = JSON.parse(localStorage.getItem('securevault_offline_vault') || '{}');
-        const idx = (localVault.credentials || []).findIndex(c => c.id === editingId);
-        if (idx !== -1) {
-          localVault.credentials[idx] = {
-            ...localVault.credentials[idx],
-            website,
-            username,
-            encryptedPassword
-          };
-          localStorage.setItem('securevault_offline_vault', JSON.stringify(localVault));
+        const vaults = getOfflineVaults();
+        const userVault = vaults[appState.currentUser.email];
+        if (userVault) {
+          const idx = (userVault.credentials || []).findIndex(c => String(c.id) === String(editingId));
+          if (idx !== -1) {
+            userVault.credentials[idx] = { ...userVault.credentials[idx], website, username, encryptedPassword };
+            saveOfflineVaults(vaults);
+          }
         }
       } else {
         const res = await fetch(`/api/credentials/${editingId}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ website, username, encryptedPassword })
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User-Id': userId
+          },
+          body: JSON.stringify({ userId, website, username, encryptedPassword })
         });
         if (!res.ok) throw new Error('Failed to update credential');
       }
 
-      // Update in-memory state
-      const targetIndex = appState.credentials.findIndex(c => c.id === editingId);
+      const targetIndex = appState.credentials.findIndex(c => String(c.id) === String(editingId));
       if (targetIndex !== -1) {
         appState.credentials[targetIndex] = {
           ...appState.credentials[targetIndex],
@@ -456,19 +605,25 @@ async function handleSaveCredential(e) {
       cancelEdit();
     } else {
       // Add new
-      let newId = Date.now();
+      let newId = 'cred_' + Date.now();
       const createdAt = new Date().toISOString();
 
       if (appState.isOfflineMode) {
-        const localVault = JSON.parse(localStorage.getItem('securevault_offline_vault') || '{}');
-        localVault.credentials = localVault.credentials || [];
-        localVault.credentials.unshift({ id: newId, website, username, encryptedPassword, createdAt });
-        localStorage.setItem('securevault_offline_vault', JSON.stringify(localVault));
+        const vaults = getOfflineVaults();
+        const userVault = vaults[appState.currentUser.email];
+        if (userVault) {
+          userVault.credentials = userVault.credentials || [];
+          userVault.credentials.unshift({ id: newId, website, username, encryptedPassword, createdAt });
+          saveOfflineVaults(vaults);
+        }
       } else {
         const res = await fetch('/api/credentials', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ website, username, encryptedPassword })
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User-Id': userId
+          },
+          body: JSON.stringify({ userId, website, username, encryptedPassword })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to save credential');
@@ -508,7 +663,7 @@ async function handleSaveCredential(e) {
 
 // Edit Credential
 function editCredential(id) {
-  const cred = appState.credentials.find(c => c.id === id);
+  const cred = appState.credentials.find(c => String(c.id) === String(id));
   if (!cred) return;
 
   appState.editingId = id;
@@ -517,7 +672,6 @@ function editCredential(id) {
   document.getElementById('credUsername').value = cred.username;
   document.getElementById('credPassword').value = cred.password;
 
-  // Trigger strength check
   const check = VaultCrypto.checkPasswordStrength(cred.password);
   const bar = document.getElementById('credStrengthBar');
   const label = document.getElementById('credStrengthLabel');
@@ -525,13 +679,11 @@ function editCredential(id) {
   label.textContent = check.strength;
   label.className = check.strength.toLowerCase();
 
-  // Update Form Card header
   document.getElementById('formCardIcon').textContent = '✏️';
-  document.getElementById('formCardTitle').textContent = `Editing Credential: ${cred.website}`;
+  document.getElementById('formCardTitle').textContent = `Editing: ${cred.website}`;
   document.getElementById('cancelEditBtn').style.display = 'inline-flex';
   document.getElementById('saveCredBtn').textContent = '💾 Update Credential';
 
-  // Scroll to form
   document.getElementById('credentialFormCard').scrollIntoView({ behavior: 'smooth' });
 }
 
@@ -549,7 +701,7 @@ function cancelEdit() {
 
 // Delete Credential Prompt
 function promptDeleteCredential(id) {
-  const cred = appState.credentials.find(c => c.id === id);
+  const cred = appState.credentials.find(c => String(c.id) === String(id));
   if (!cred) return;
 
   appState.deleteTargetId = id;
@@ -559,20 +711,28 @@ function promptDeleteCredential(id) {
 
 async function executeDeleteCredential() {
   const id = appState.deleteTargetId;
-  if (!id) return;
+  if (!id || !appState.currentUser) return;
+
+  const userId = appState.currentUser.id;
 
   try {
     if (appState.isOfflineMode) {
-      const localVault = JSON.parse(localStorage.getItem('securevault_offline_vault') || '{}');
-      localVault.credentials = (localVault.credentials || []).filter(c => c.id !== id);
-      localStorage.setItem('securevault_offline_vault', JSON.stringify(localVault));
+      const vaults = getOfflineVaults();
+      const userVault = vaults[appState.currentUser.email];
+      if (userVault) {
+        userVault.credentials = (userVault.credentials || []).filter(c => String(c.id) !== String(id));
+        saveOfflineVaults(vaults);
+      }
     } else {
-      const res = await fetch(`/api/credentials/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/credentials/${id}`, {
+        method: 'DELETE',
+        headers: { 'X-User-Id': userId }
+      });
       if (!res.ok) throw new Error('Failed to delete credential');
     }
 
-    appState.credentials = appState.credentials.filter(c => c.id !== id);
-    if (appState.editingId === id) cancelEdit();
+    appState.credentials = appState.credentials.filter(c => String(c.id) !== String(id));
+    if (String(appState.editingId) === String(id)) cancelEdit();
 
     closeModal('deleteModal');
     showToast('Credential deleted', 'success');
@@ -585,7 +745,7 @@ async function executeDeleteCredential() {
 }
 
 // ----------------------------------------------------------
-// Clipboard & 10-Second Auto-Clear Feature
+// Clipboard with 10-Second Auto-Clear Feature
 // ----------------------------------------------------------
 function copyPasswordWithAutoClear(password, website) {
   navigator.clipboard.writeText(password).then(() => {
@@ -621,7 +781,6 @@ function startClipboardCountdown() {
 
     if (secondsRemaining <= 0) {
       clearClipboardCountdown();
-      // Auto-clear clipboard for security
       navigator.clipboard.writeText('').then(() => {
         showToast('Clipboard cleared automatically for security.', 'warning');
       }).catch(() => {});
@@ -638,18 +797,18 @@ function clearClipboardCountdown() {
   if (banner) banner.style.display = 'none';
 }
 
-// Toggle inline password visibility in table
 function toggleInlinePassword(id) {
-  if (appState.revealedSet.has(id)) {
-    appState.revealedSet.delete(id);
+  const strId = String(id);
+  if (appState.revealedSet.has(strId)) {
+    appState.revealedSet.delete(strId);
   } else {
-    appState.revealedSet.add(id);
+    appState.revealedSet.add(strId);
   }
   renderCredentials();
 }
 
 // ----------------------------------------------------------
-// Rendering & UI Updates
+// Rendering & Filtering
 // ----------------------------------------------------------
 function renderCredentials() {
   const tbody = document.getElementById('credentialsListBody');
@@ -666,7 +825,7 @@ function renderCredentials() {
   emptyState.style.display = 'none';
 
   list.forEach(cred => {
-    const isRevealed = appState.revealedSet.has(cred.id);
+    const isRevealed = appState.revealedSet.has(String(cred.id));
     const domain = extractDomain(cred.website);
     const firstLetter = (cred.website || '?').charAt(0).toUpperCase();
 
@@ -758,7 +917,7 @@ function handleSort() {
 }
 
 // ----------------------------------------------------------
-// Password Generator Modal Logic
+// Password Generator Modal
 // ----------------------------------------------------------
 function openGeneratorModal() {
   regeneratePassword();
@@ -808,7 +967,6 @@ function applyGeneratedPassword() {
   const pw = document.getElementById('genResult').value;
   document.getElementById('credPassword').value = pw;
 
-  // Trigger strength indicator on form
   const check = VaultCrypto.checkPasswordStrength(pw);
   const bar = document.getElementById('credStrengthBar');
   const label = document.getElementById('credStrengthLabel');
@@ -828,7 +986,7 @@ function openEncryptedViewerModal() {
   select.innerHTML = '';
 
   if (appState.credentials.length === 0) {
-    select.innerHTML = '<option value="">No credentials available</option>';
+    select.innerHTML = '<option value="">No credentials available in active vault</option>';
     document.getElementById('encryptedIV').textContent = '—';
     document.getElementById('encryptedCipher').textContent = '—';
     document.getElementById('encryptedCombined').textContent = '—';
@@ -864,7 +1022,7 @@ function displayEncryptedDetails() {
 }
 
 // ----------------------------------------------------------
-// Change Master Password Logic
+// Change Master Password (Active User)
 // ----------------------------------------------------------
 function openChangePasswordModal() {
   document.getElementById('changePasswordForm').reset();
@@ -873,6 +1031,9 @@ function openChangePasswordModal() {
 }
 
 async function submitChangePassword() {
+  if (!appState.currentUser) return;
+  const userId = appState.currentUser.id;
+
   const currentPassword = document.getElementById('currentMasterPass').value;
   const newPassword = document.getElementById('newMasterPass').value;
   const confirmNew = document.getElementById('confirmNewMasterPass').value;
@@ -899,19 +1060,16 @@ async function submitChangePassword() {
   }
 
   try {
-    // 1. Verify current password
     const currentHash = await VaultCrypto.sha256(currentPassword);
     if (currentHash !== appState.masterPasswordHash) {
       showStatusMessage(statusDiv, 'Current password is incorrect', 'error');
       return;
     }
 
-    // 2. Generate new salt & derive new session key
     const newSalt = VaultCrypto.generateSalt();
     const newSessionKey = await VaultCrypto.deriveKey(newPassword, newSalt);
     const newPasswordHash = await VaultCrypto.sha256(newPassword);
 
-    // 3. Re-encrypt all stored credentials with the new key
     const reEncrypted = [];
     for (const cred of appState.credentials) {
       const newEncryptedPassword = await VaultCrypto.encrypt(cred.password, newSessionKey);
@@ -919,19 +1077,26 @@ async function submitChangePassword() {
     }
 
     if (appState.isOfflineMode) {
-      const localVault = JSON.parse(localStorage.getItem('securevault_offline_vault') || '{}');
-      localVault.passwordHash = newPasswordHash;
-      localVault.salt = newSalt;
-      localVault.credentials = localVault.credentials.map(c => {
-        const found = reEncrypted.find(r => r.id === c.id);
-        return found ? { ...c, encryptedPassword: found.encryptedPassword } : c;
-      });
-      localStorage.setItem('securevault_offline_vault', JSON.stringify(localVault));
+      const vaults = getOfflineVaults();
+      const userVault = vaults[appState.currentUser.email];
+      if (userVault) {
+        userVault.passwordHash = newPasswordHash;
+        userVault.salt = newSalt;
+        userVault.credentials = userVault.credentials.map(c => {
+          const found = reEncrypted.find(r => String(r.id) === String(c.id));
+          return found ? { ...c, encryptedPassword: found.encryptedPassword } : c;
+        });
+        saveOfflineVaults(vaults);
+      }
     } else {
       const res = await fetch('/api/change-master-password', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': userId
+        },
         body: JSON.stringify({
+          userId,
           currentPasswordHash: currentHash,
           newPasswordHash,
           newSalt,
@@ -942,12 +1107,11 @@ async function submitChangePassword() {
       if (!res.ok) throw new Error(data.error || 'Failed to update master password');
     }
 
-    // Update in-memory state with new session key and hash
     appState.sessionKey = newSessionKey;
-    appState.salt = newSalt;
     appState.masterPasswordHash = newPasswordHash;
+    appState.currentUser.salt = newSalt;
     appState.credentials = appState.credentials.map(c => {
-      const found = reEncrypted.find(r => r.id === c.id);
+      const found = reEncrypted.find(r => String(r.id) === String(c.id));
       return found ? { ...c, encryptedPassword: found.encryptedPassword } : c;
     });
 
@@ -962,15 +1126,16 @@ async function submitChangePassword() {
 // ----------------------------------------------------------
 // Export & Import Backup
 // ----------------------------------------------------------
-
-// Direct download of Backup.txt matching Java VaultFH format
 function exportBackupText() {
   if (appState.credentials.length === 0) {
-    showToast('No credentials to export', 'warning');
+    showToast('No credentials in active vault to export', 'warning');
     return;
   }
 
-  let text = '';
+  let text = `Vault Backup: ${appState.currentUser.email}\n`;
+  text += `Exported: ${new Date().toISOString()}\n`;
+  text += `-------------------------------\n`;
+
   appState.credentials.forEach(c => {
     text += `Website: ${c.website}\n`;
     text += `Username: ${c.username}\n`;
@@ -982,13 +1147,13 @@ function exportBackupText() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'Backup.txt';
+  a.download = `Backup_${appState.currentUser.email}.txt`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 
-  showToast(`Exported ${appState.credentials.length} credentials to Backup.txt`, 'success');
+  showToast(`Exported ${appState.credentials.length} credentials to file`, 'success');
 }
 
 function openExportModal() {
@@ -1013,6 +1178,9 @@ function handleFileSelect(event) {
 }
 
 async function submitImport() {
+  if (!appState.currentUser) return;
+  const userId = appState.currentUser.id;
+
   const content = document.getElementById('importText').value.trim();
   if (!content) {
     showToast('Please provide backup text or select a file', 'warning');
@@ -1040,26 +1208,31 @@ async function submitImport() {
     }
 
     if (appState.isOfflineMode) {
-      const localVault = JSON.parse(localStorage.getItem('securevault_offline_vault') || '{}');
-      localVault.credentials = localVault.credentials || [];
-      encryptedBatch.forEach(b => {
-        localVault.credentials.unshift({ id: Date.now() + Math.random(), ...b });
-      });
-      localStorage.setItem('securevault_offline_vault', JSON.stringify(localVault));
+      const vaults = getOfflineVaults();
+      const userVault = vaults[appState.currentUser.email];
+      if (userVault) {
+        userVault.credentials = userVault.credentials || [];
+        encryptedBatch.forEach(b => {
+          userVault.credentials.unshift({ id: 'cred_' + Date.now() + Math.random(), ...b });
+        });
+        saveOfflineVaults(vaults);
+      }
     } else {
       const res = await fetch('/api/import', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ credentials: encryptedBatch })
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': userId
+        },
+        body: JSON.stringify({ userId, credentials: encryptedBatch })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Import failed on server');
     }
 
-    // Refresh credentials list
     await loadAndDecryptCredentials();
     closeModal('importModal');
-    showToast(`Successfully imported ${parsed.length} credentials!`, 'success');
+    showToast(`Imported ${parsed.length} credentials into your vault!`, 'success');
     handleSearch();
     updateStats();
   } catch (err) {
@@ -1068,9 +1241,7 @@ async function submitImport() {
   }
 }
 
-// Parses Backup.txt format or JSON format
 function parseBackupText(text) {
-  // Try JSON first
   if (text.startsWith('[') || text.startsWith('{')) {
     try {
       const json = JSON.parse(text);
@@ -1079,7 +1250,6 @@ function parseBackupText(text) {
     } catch (_) {}
   }
 
-  // Parse text block format
   const blocks = text.split(/---+/);
   const results = [];
 
@@ -1104,6 +1274,22 @@ function parseBackupText(text) {
   }
 
   return results;
+}
+
+// ----------------------------------------------------------
+// Offline Vault Helpers
+// ----------------------------------------------------------
+function getOfflineVaults() {
+  try {
+    const raw = localStorage.getItem('securevault_offline_vaults');
+    return raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveOfflineVaults(vaults) {
+  localStorage.setItem('securevault_offline_vaults', JSON.stringify(vaults));
 }
 
 // ----------------------------------------------------------

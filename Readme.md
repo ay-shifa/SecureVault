@@ -37,11 +37,13 @@ A **secure, professional-grade desktop and web password manager** built with Zer
 - ✅ Search by website name (SQL LIKE with PreparedStatements)
 
 ### 🔄 Advanced Features
+- ✅ **Multi-Account & Multi-Vault**: Create multiple separate accounts, each with its own independent Master Password, unique salt, and isolated encrypted credentials
+- ✅ **Quick Account Switcher**: Switch between accounts seamlessly with local device autocomplete
 - ✅ **Change master password** without losing stored credentials
 - ✅ **Selective credential export** to backup file
 - ✅ **Encrypted password viewer** (educational security feature)
-- ✅ Database persistence (SQLite)
-- ✅ Professional CSS-styled JavaFX interface
+- ✅ Database persistence (MongoDB Atlas Cloud & SQLite)
+- ✅ Professional CSS-styled JavaFX & Web interfaces
 
 ### 🛡️ Security Best Practices
 - ✅ No plaintext passwords in database

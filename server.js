@@ -1,9 +1,9 @@
 // ==========================================================
 // SecureVault Web Server
+// Multi-Account Zero-Knowledge Web Password Manager
 // Supports:
 // 1. Cloud Database: MongoDB Atlas (via MONGODB_URI in .env)
 // 2. Local Database: SQLite (fallback via node:sqlite)
-// Zero-Knowledge Architecture with client-side cryptography
 // ==========================================================
 
 require('dotenv').config();
@@ -18,56 +18,80 @@ const DB_PATH = path.join(__dirname, 'securevault.db');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 // ----------------------------------------------------------
-// Database Adapters
+// Database Adapters (Multi-Account)
 // ----------------------------------------------------------
 
 class MongoAdapter {
   constructor(client, dbName) {
     this.client = client;
     this.db = client.db(dbName || 'SecureVault');
-    this.masterPasswordCol = this.db.collection('master_password');
+    this.usersCol = this.db.collection('users');
     this.credentialsCol = this.db.collection('credentials');
     this.type = 'mongodb';
   }
 
-  async hasMasterPassword() {
-    const doc = await this.masterPasswordCol.findOne();
-    return !!doc;
+  async countUsers() {
+    return await this.usersCol.countDocuments();
   }
 
-  async getMasterPasswordRecord() {
-    const doc = await this.masterPasswordCol.findOne();
-    if (!doc) return null;
-    return {
-      password_hash: doc.password_hash,
-      salt: doc.salt,
-      created_at: doc.created_at
-    };
+  async findUserByEmail(email) {
+    const normalized = email.trim().toLowerCase();
+    return await this.usersCol.findOne({ email: normalized });
   }
 
-  async saveMasterPassword(passwordHash, salt, createdAt) {
-    await this.masterPasswordCol.insertOne({
+  async findUserById(id) {
+    let query;
+    try {
+      query = { _id: new ObjectId(id) };
+    } catch (_) {
+      query = { _id: id };
+    }
+    return await this.usersCol.findOne(query);
+  }
+
+  async createUser(email, passwordHash, salt, createdAt) {
+    const normalized = email.trim().toLowerCase();
+    const res = await this.usersCol.insertOne({
+      email: normalized,
       password_hash: passwordHash,
       salt: salt,
-      created_at: createdAt
+      created_at: createdAt || new Date().toISOString()
     });
+    return res.insertedId.toString();
   }
 
-  async updateMasterPassword(passwordHash, salt) {
+  async updateUserPassword(id, passwordHash, salt) {
+    let query;
+    try {
+      query = { _id: new ObjectId(id) };
+    } catch (_) {
+      query = { _id: id };
+    }
     const updateFields = {
       password_hash: passwordHash,
       updated_at: new Date().toISOString()
     };
     if (salt) updateFields.salt = salt;
-    await this.masterPasswordCol.updateOne({}, { $set: updateFields });
+    const res = await this.usersCol.updateOne(query, { $set: updateFields });
+    return res.matchedCount > 0;
   }
 
-  async countCredentials() {
-    return await this.credentialsCol.countDocuments();
+  async listRecentAccounts() {
+    const users = await this.usersCol.find({}, { projection: { email: 1, created_at: 1 } })
+      .sort({ created_at: -1 })
+      .limit(10)
+      .toArray();
+    return users.map(u => ({ id: u._id.toString(), email: u.email }));
   }
 
-  async getAllCredentials() {
-    const docs = await this.credentialsCol.find().sort({ created_at: -1 }).toArray();
+  async countCredentials(userId) {
+    return await this.credentialsCol.countDocuments({ userId: userId.toString() });
+  }
+
+  async getCredentialsByUser(userId) {
+    const docs = await this.credentialsCol.find({ userId: userId.toString() })
+      .sort({ created_at: -1 })
+      .toArray();
     return docs.map(d => ({
       id: d._id.toString(),
       website: d.website,
@@ -77,22 +101,23 @@ class MongoAdapter {
     }));
   }
 
-  async addCredential(website, username, encryptedPassword, createdAt) {
+  async addCredential(userId, website, username, encryptedPassword, createdAt) {
     const res = await this.credentialsCol.insertOne({
+      userId: userId.toString(),
       website,
       username,
       encrypted_password: encryptedPassword,
-      created_at: createdAt
+      created_at: createdAt || new Date().toISOString()
     });
     return res.insertedId.toString();
   }
 
-  async updateCredential(id, website, username, encryptedPassword) {
+  async updateCredential(id, userId, website, username, encryptedPassword) {
     let query;
     try {
-      query = { _id: new ObjectId(id) };
+      query = { _id: new ObjectId(id), userId: userId.toString() };
     } catch (_) {
-      query = { _id: id };
+      query = { _id: id, userId: userId.toString() };
     }
     const res = await this.credentialsCol.updateOne(query, {
       $set: {
@@ -105,24 +130,24 @@ class MongoAdapter {
     return res.matchedCount > 0;
   }
 
-  async deleteCredential(id) {
+  async deleteCredential(id, userId) {
     let query;
     try {
-      query = { _id: new ObjectId(id) };
+      query = { _id: new ObjectId(id), userId: userId.toString() };
     } catch (_) {
-      query = { _id: id };
+      query = { _id: id, userId: userId.toString() };
     }
     const res = await this.credentialsCol.deleteOne(query);
     return res.deletedCount > 0;
   }
 
-  async reEncryptCredentials(reEncryptedList) {
+  async reEncryptCredentials(userId, reEncryptedList) {
     for (const item of reEncryptedList) {
       let query;
       try {
-        query = { _id: new ObjectId(item.id) };
+        query = { _id: new ObjectId(item.id), userId: userId.toString() };
       } catch (_) {
-        query = { _id: item.id };
+        query = { _id: item.id, userId: userId.toString() };
       }
       await this.credentialsCol.updateOne(query, {
         $set: { encrypted_password: item.encryptedPassword }
@@ -130,9 +155,10 @@ class MongoAdapter {
     }
   }
 
-  async batchInsertCredentials(list) {
+  async batchInsertCredentials(userId, list) {
     if (!list || list.length === 0) return 0;
     const docs = list.map(item => ({
+      userId: userId.toString(),
       website: item.website,
       username: item.username,
       encrypted_password: item.encryptedPassword,
@@ -152,8 +178,9 @@ class SqliteAdapter {
 
   init() {
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS master_password (
+      CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
         salt TEXT NOT NULL,
         created_at TEXT NOT NULL
@@ -161,49 +188,90 @@ class SqliteAdapter {
 
       CREATE TABLE IF NOT EXISTS credentials (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL DEFAULT '1',
         website TEXT NOT NULL,
         username TEXT NOT NULL,
         encrypted_password TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
     `);
+
+    // Ensure user_id column exists if table was created in older version
+    try {
+      const colInfo = this.db.prepare("PRAGMA table_info(credentials)").all();
+      const hasUserId = colInfo.some(c => c.name === 'user_id');
+      if (!hasUserId) {
+        this.db.exec("ALTER TABLE credentials ADD COLUMN user_id TEXT NOT NULL DEFAULT '1'");
+      }
+    } catch (_) {}
   }
 
-  async hasMasterPassword() {
-    const row = this.db.prepare('SELECT COUNT(*) as cnt FROM master_password').get();
-    return row && row.cnt > 0;
-  }
-
-  async getMasterPasswordRecord() {
-    return this.db.prepare('SELECT password_hash, salt, created_at FROM master_password LIMIT 1').get();
-  }
-
-  async saveMasterPassword(passwordHash, salt, createdAt) {
-    this.db.prepare('INSERT INTO master_password (password_hash, salt, created_at) VALUES (?, ?, ?)')
-      .run(passwordHash, salt, createdAt);
-  }
-
-  async updateMasterPassword(passwordHash, salt) {
-    if (salt) {
-      this.db.prepare('UPDATE master_password SET password_hash = ?, salt = ? WHERE id = 1')
-        .run(passwordHash, salt);
-    } else {
-      this.db.prepare('UPDATE master_password SET password_hash = ? WHERE id = 1')
-        .run(passwordHash);
-    }
-  }
-
-  async countCredentials() {
-    const row = this.db.prepare('SELECT COUNT(*) as cnt FROM credentials').get();
+  async countUsers() {
+    const row = this.db.prepare('SELECT COUNT(*) as cnt FROM users').get();
     return row ? row.cnt : 0;
   }
 
-  async getAllCredentials() {
+  async findUserByEmail(email) {
+    const normalized = email.trim().toLowerCase();
+    const row = this.db.prepare('SELECT id, email, password_hash, salt, created_at FROM users WHERE LOWER(email) = ?').get(normalized);
+    if (!row) return null;
+    return {
+      _id: row.id.toString(),
+      email: row.email,
+      password_hash: row.password_hash,
+      salt: row.salt,
+      created_at: row.created_at
+    };
+  }
+
+  async findUserById(id) {
+    const row = this.db.prepare('SELECT id, email, password_hash, salt, created_at FROM users WHERE id = ?').get(parseInt(id, 10));
+    if (!row) return null;
+    return {
+      _id: row.id.toString(),
+      email: row.email,
+      password_hash: row.password_hash,
+      salt: row.salt,
+      created_at: row.created_at
+    };
+  }
+
+  async createUser(email, passwordHash, salt, createdAt) {
+    const normalized = email.trim().toLowerCase();
+    const res = this.db.prepare('INSERT INTO users (email, password_hash, salt, created_at) VALUES (?, ?, ?, ?)')
+      .run(normalized, passwordHash, salt, createdAt || new Date().toISOString());
+    return res.lastInsertRowid.toString();
+  }
+
+  async updateUserPassword(id, passwordHash, salt) {
+    if (salt) {
+      const res = this.db.prepare('UPDATE users SET password_hash = ?, salt = ? WHERE id = ?')
+        .run(passwordHash, salt, parseInt(id, 10));
+      return res.changes > 0;
+    } else {
+      const res = this.db.prepare('UPDATE users SET password_hash = ? WHERE id = ?')
+        .run(passwordHash, parseInt(id, 10));
+      return res.changes > 0;
+    }
+  }
+
+  async listRecentAccounts() {
+    const rows = this.db.prepare('SELECT id, email FROM users ORDER BY id DESC LIMIT 10').all();
+    return rows.map(r => ({ id: r.id.toString(), email: r.email }));
+  }
+
+  async countCredentials(userId) {
+    const row = this.db.prepare('SELECT COUNT(*) as cnt FROM credentials WHERE user_id = ?').get(userId.toString());
+    return row ? row.cnt : 0;
+  }
+
+  async getCredentialsByUser(userId) {
     const rows = this.db.prepare(`
       SELECT id, website, username, encrypted_password as encryptedPassword, created_at as createdAt 
       FROM credentials 
+      WHERE user_id = ? 
       ORDER BY id DESC
-    `).all();
+    `).all(userId.toString());
     return rows.map(r => ({
       id: r.id.toString(),
       website: r.website,
@@ -213,44 +281,45 @@ class SqliteAdapter {
     }));
   }
 
-  async addCredential(website, username, encryptedPassword, createdAt) {
+  async addCredential(userId, website, username, encryptedPassword, createdAt) {
     const res = this.db.prepare(`
-      INSERT INTO credentials (website, username, encrypted_password, created_at) 
-      VALUES (?, ?, ?, ?)
-    `).run(website, username, encryptedPassword, createdAt);
+      INSERT INTO credentials (user_id, website, username, encrypted_password, created_at) 
+      VALUES (?, ?, ?, ?, ?)
+    `).run(userId.toString(), website, username, encryptedPassword, createdAt || new Date().toISOString());
     return res.lastInsertRowid.toString();
   }
 
-  async updateCredential(id, website, username, encryptedPassword) {
+  async updateCredential(id, userId, website, username, encryptedPassword) {
     const res = this.db.prepare(`
       UPDATE credentials 
       SET website = ?, username = ?, encrypted_password = ? 
-      WHERE id = ?
-    `).run(website, username, encryptedPassword, parseInt(id, 10));
+      WHERE id = ? AND user_id = ?
+    `).run(website, username, encryptedPassword, parseInt(id, 10), userId.toString());
     return res.changes > 0;
   }
 
-  async deleteCredential(id) {
-    const res = this.db.prepare('DELETE FROM credentials WHERE id = ?').run(parseInt(id, 10));
+  async deleteCredential(id, userId) {
+    const res = this.db.prepare('DELETE FROM credentials WHERE id = ? AND user_id = ?')
+      .run(parseInt(id, 10), userId.toString());
     return res.changes > 0;
   }
 
-  async reEncryptCredentials(reEncryptedList) {
-    const stmt = this.db.prepare('UPDATE credentials SET encrypted_password = ? WHERE id = ?');
+  async reEncryptCredentials(userId, reEncryptedList) {
+    const stmt = this.db.prepare('UPDATE credentials SET encrypted_password = ? WHERE id = ? AND user_id = ?');
     for (const item of reEncryptedList) {
-      stmt.run(item.encryptedPassword, parseInt(item.id, 10));
+      stmt.run(item.encryptedPassword, parseInt(item.id, 10), userId.toString());
     }
   }
 
-  async batchInsertCredentials(list) {
+  async batchInsertCredentials(userId, list) {
     const stmt = this.db.prepare(`
-      INSERT INTO credentials (website, username, encrypted_password, created_at) 
-      VALUES (?, ?, ?, ?)
+      INSERT INTO credentials (user_id, website, username, encrypted_password, created_at) 
+      VALUES (?, ?, ?, ?, ?)
     `);
     let count = 0;
     const now = new Date().toISOString();
     for (const item of list) {
-      stmt.run(item.website, item.username, item.encryptedPassword, item.createdAt || now);
+      stmt.run(userId.toString(), item.website, item.username, item.encryptedPassword, item.createdAt || now);
       count++;
     }
     return count;
@@ -302,7 +371,7 @@ function sendJSON(res, statusCode, data) {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-User-Id',
     'Cache-Control': 'no-store'
   });
   res.end(json);
@@ -326,6 +395,12 @@ function parseBody(req) {
   });
 }
 
+function getUserIdFromRequest(req, parsedUrl, body) {
+  return req.headers['x-user-id'] ||
+         parsedUrl.searchParams.get('userId') ||
+         (body && body.userId);
+}
+
 // ----------------------------------------------------------
 // HTTP Server & Request Dispatcher
 // ----------------------------------------------------------
@@ -338,29 +413,22 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-User-Id'
     });
     return res.end();
   }
 
-  // 1. GET /api/status
+  // 1. GET /api/status - Server status & existing accounts info
   if (method === 'GET' && pathname === '/api/status') {
     try {
-      const hasMaster = await activeDb.hasMasterPassword();
-      let salt = null;
-
-      if (hasMaster) {
-        const record = await activeDb.getMasterPasswordRecord();
-        if (record) salt = record.salt;
-      }
-
-      const totalCount = await activeDb.countCredentials();
+      const userCount = await activeDb.countUsers();
+      const recentAccounts = await activeDb.listRecentAccounts();
 
       return sendJSON(res, 200, {
-        initialized: hasMaster,
-        salt: salt,
-        totalCredentials: totalCount,
-        dbType: activeDb.type // 'mongodb' or 'sqlite'
+        totalUsers: userCount,
+        hasUsers: userCount > 0,
+        recentAccounts: recentAccounts,
+        dbType: activeDb.type
       });
     } catch (err) {
       console.error('API /status error:', err);
@@ -368,68 +436,77 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 2. POST /api/setup
-  if (method === 'POST' && pathname === '/api/setup') {
+  // 2. POST /api/register - Register a new account with its own master password
+  if (method === 'POST' && pathname === '/api/register') {
     try {
-      const hasMaster = await activeDb.hasMasterPassword();
-      if (hasMaster) {
-        return sendJSON(res, 400, { error: 'Master Password already exists' });
-      }
-
       const body = await parseBody(req);
-      const { passwordHash, salt } = body;
+      const { email, passwordHash, salt } = body;
 
-      if (!passwordHash || !salt) {
-        return sendJSON(res, 400, { error: 'Missing passwordHash or salt' });
+      if (!email || !passwordHash || !salt) {
+        return sendJSON(res, 400, { error: 'Email/Username, Master Password hash, and salt are required' });
       }
 
-      const createdAt = new Date().toISOString();
-      await activeDb.saveMasterPassword(passwordHash, salt, createdAt);
+      const existing = await activeDb.findUserByEmail(email);
+      if (existing) {
+        return sendJSON(res, 400, { error: 'An account with this email or username already exists. Please log in.' });
+      }
 
-      return sendJSON(res, 200, {
+      const userId = await activeDb.createUser(email, passwordHash, salt);
+
+      return sendJSON(res, 201, {
         success: true,
-        message: 'Master Password created successfully in Cloud Database'
+        message: 'Account created successfully',
+        userId: userId,
+        email: email.trim().toLowerCase(),
+        salt: salt
       });
     } catch (err) {
-      console.error('API /setup error:', err);
+      console.error('API /register error:', err);
       return sendJSON(res, 500, { error: err.message });
     }
   }
 
-  // 3. POST /api/verify
-  if (method === 'POST' && pathname === '/api/verify') {
+  // 3. POST /api/login - Log into a specific account
+  if (method === 'POST' && pathname === '/api/login') {
     try {
       const body = await parseBody(req);
-      const { passwordHash } = body;
+      const { email, passwordHash } = body;
 
-      if (!passwordHash) {
-        return sendJSON(res, 400, { error: 'Please provide master password hash' });
+      if (!email || !passwordHash) {
+        return sendJSON(res, 400, { error: 'Email/Username and Master Password are required' });
       }
 
-      const record = await activeDb.getMasterPasswordRecord();
-      if (!record) {
-        return sendJSON(res, 404, { error: 'Master Password not found. Please setup first.' });
+      const user = await activeDb.findUserByEmail(email);
+      if (!user) {
+        return sendJSON(res, 404, { error: 'Account not found. Please check username or create a new account.' });
       }
 
-      if (record.password_hash === passwordHash) {
+      if (user.password_hash === passwordHash) {
         return sendJSON(res, 200, {
           success: true,
           message: 'Unlock successful',
-          salt: record.salt
+          userId: user._id.toString(),
+          email: user.email,
+          salt: user.salt
         });
       } else {
         return sendJSON(res, 401, { success: false, error: 'Incorrect Master Password' });
       }
     } catch (err) {
-      console.error('API /verify error:', err);
+      console.error('API /login error:', err);
       return sendJSON(res, 500, { error: err.message });
     }
   }
 
-  // 4. GET /api/credentials
+  // 4. GET /api/credentials - List credentials for the authenticated user
   if (method === 'GET' && pathname === '/api/credentials') {
     try {
-      const list = await activeDb.getAllCredentials();
+      const userId = getUserIdFromRequest(req, parsedUrl);
+      if (!userId) {
+        return sendJSON(res, 401, { error: 'User ID is required to fetch credentials' });
+      }
+
+      const list = await activeDb.getCredentialsByUser(userId);
       return sendJSON(res, 200, { credentials: list });
     } catch (err) {
       console.error('API /credentials GET error:', err);
@@ -437,11 +514,16 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 5. POST /api/credentials
+  // 5. POST /api/credentials - Add credential for the authenticated user
   if (method === 'POST' && pathname === '/api/credentials') {
     try {
       const body = await parseBody(req);
+      const userId = getUserIdFromRequest(req, parsedUrl, body);
       const { website, username, encryptedPassword } = body;
+
+      if (!userId) {
+        return sendJSON(res, 401, { error: 'User ID is required' });
+      }
 
       if (!website || !username || !encryptedPassword) {
         return sendJSON(res, 400, { error: 'Website, username, and encrypted password are required' });
@@ -449,6 +531,7 @@ const server = http.createServer(async (req, res) => {
 
       const createdAt = new Date().toISOString();
       const newId = await activeDb.addCredential(
+        userId,
         website.trim(),
         username.trim(),
         encryptedPassword,
@@ -471,13 +554,18 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 6. PUT /api/credentials/:id
+  // 6. PUT /api/credentials/:id - Update credential
   const putMatch = pathname.match(/^\/api\/credentials\/([a-zA-Z0-9_-]+)$/);
   if (method === 'PUT' && putMatch) {
     try {
       const id = putMatch[1];
       const body = await parseBody(req);
+      const userId = getUserIdFromRequest(req, parsedUrl, body);
       const { website, username, encryptedPassword } = body;
+
+      if (!userId) {
+        return sendJSON(res, 401, { error: 'User ID is required' });
+      }
 
       if (!website || !username || !encryptedPassword) {
         return sendJSON(res, 400, { error: 'Website, username, and encrypted password are required' });
@@ -485,13 +573,14 @@ const server = http.createServer(async (req, res) => {
 
       const updated = await activeDb.updateCredential(
         id,
+        userId,
         website.trim(),
         username.trim(),
         encryptedPassword
       );
 
       if (!updated) {
-        return sendJSON(res, 404, { error: 'Credential not found' });
+        return sendJSON(res, 404, { error: 'Credential not found or not owned by this account' });
       }
 
       return sendJSON(res, 200, {
@@ -504,15 +593,21 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 7. DELETE /api/credentials/:id
+  // 7. DELETE /api/credentials/:id - Delete credential
   const delMatch = pathname.match(/^\/api\/credentials\/([a-zA-Z0-9_-]+)$/);
   if (method === 'DELETE' && delMatch) {
     try {
       const id = delMatch[1];
-      const deleted = await activeDb.deleteCredential(id);
+      const userId = getUserIdFromRequest(req, parsedUrl);
+
+      if (!userId) {
+        return sendJSON(res, 401, { error: 'User ID is required' });
+      }
+
+      const deleted = await activeDb.deleteCredential(id, userId);
 
       if (!deleted) {
-        return sendJSON(res, 404, { error: 'Credential not found' });
+        return sendJSON(res, 404, { error: 'Credential not found or not owned by this account' });
       }
 
       return sendJSON(res, 200, { success: true, message: 'Credential deleted successfully' });
@@ -522,25 +617,30 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 8. POST /api/change-master-password
+  // 8. POST /api/change-master-password - Change master password for authenticated user
   if (method === 'POST' && pathname === '/api/change-master-password') {
     try {
       const body = await parseBody(req);
+      const userId = getUserIdFromRequest(req, parsedUrl, body);
       const { currentPasswordHash, newPasswordHash, newSalt, reEncryptedCredentials } = body;
+
+      if (!userId) {
+        return sendJSON(res, 401, { error: 'User ID is required' });
+      }
 
       if (!currentPasswordHash || !newPasswordHash || !newSalt) {
         return sendJSON(res, 400, { error: 'Missing required password change fields' });
       }
 
-      const record = await activeDb.getMasterPasswordRecord();
-      if (!record || record.password_hash !== currentPasswordHash) {
+      const user = await activeDb.findUserById(userId);
+      if (!user || user.password_hash !== currentPasswordHash) {
         return sendJSON(res, 401, { error: 'Current master password verification failed' });
       }
 
-      await activeDb.updateMasterPassword(newPasswordHash, newSalt);
+      await activeDb.updateUserPassword(userId, newPasswordHash, newSalt);
 
       if (Array.isArray(reEncryptedCredentials) && reEncryptedCredentials.length > 0) {
-        await activeDb.reEncryptCredentials(reEncryptedCredentials);
+        await activeDb.reEncryptCredentials(userId, reEncryptedCredentials);
       }
 
       return sendJSON(res, 200, {
@@ -553,17 +653,22 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 9. POST /api/import
+  // 9. POST /api/import - Import credentials for authenticated user
   if (method === 'POST' && pathname === '/api/import') {
     try {
       const body = await parseBody(req);
+      const userId = getUserIdFromRequest(req, parsedUrl, body);
       const { credentials } = body;
+
+      if (!userId) {
+        return sendJSON(res, 401, { error: 'User ID is required' });
+      }
 
       if (!Array.isArray(credentials) || credentials.length === 0) {
         return sendJSON(res, 400, { error: 'Valid credentials array required' });
       }
 
-      const count = await activeDb.batchInsertCredentials(credentials);
+      const count = await activeDb.batchInsertCredentials(userId, credentials);
       return sendJSON(res, 200, { success: true, count });
     } catch (err) {
       console.error('API /import error:', err);
@@ -614,17 +719,17 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-// Start Server after database initialization
 setupDatabase().then(() => {
   server.listen(PORT, () => {
     console.log(`
 ============================================================
-🔒 SecureVault Web Application
+🔒 SecureVault Web Application (Multi-Account Edition)
 ============================================================
 Server running at: http://localhost:${PORT}
 Active Database:   ${activeDb.type === 'mongodb' ? '☁️ MongoDB Atlas Cloud' : '💾 Local SQLite (' + DB_PATH + ')'}
 Static folder:     ${PUBLIC_DIR}
 Zero-Knowledge:    AES-256-CBC with PBKDF2 (65,536 iterations)
+Multi-Tenant:      Each account has its own isolated vault & key
 ============================================================
 `);
   });
